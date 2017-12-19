@@ -1,0 +1,240 @@
+esempio di utilizzo di una pagina di login per l'autenticazione e l'invio ad un'altra pagina web di gestione.
+Nel caso in cui vogliamo aggiungere il login ad una single page application senza modificare la single page application gia' costituita, 
+basta aggiungere una pagina di login, un filtro, un controller, un service (interfaccia) e un service implementato.
+Stiamo supponendo che username e password siano fissi e statici all'interno dell'applicazione e non siano recuperati da un database, cosi' da non aver
+bisogno di entità e dao.
+Qualora il nome utente e password inseriti siano corretti, il servizio produce un token che viene salvato dal browser.
+La pagina successiva "PaginaDiGestione.html" deve contenere le porzioni di codice che controllino che il token sia effettivamente presente.
+
+
+---------------------------------------------######LOGIN PAGE: signin.html########-----------------------------------------------------
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login</title>
+    <link rel="icon" href="https://d30y9cdsu7xlg0.cloudfront.net/png/99166-200.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bulma/0.6.0/css/bulma.css">
+    <link href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,700" rel="stylesheet">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+
+</head>
+<body>
+
+<div id="signindiv">
+    <section class="hero is-fullheight">
+        <div class="hero-body">
+            <div class="container has-text-centered">
+                <div class="column is-4 is-offset-4">
+                    <h3 class="title">Login</h3>
+                    <p class="subtitle">Effettuare il login per procedere.</p>
+                    <div class="box">
+                        <figure class="avatar">
+                            <img src="https://cdn.iconverticons.com/files/png/8e3c6dcf41f91775_256x256.png">
+                        </figure>
+                        <form>
+                            <div class="field">
+                                <div class="control">
+                                    <input class="input is-medium" type="email" placeholder="Username" autofocus="" id="username">
+                                </div>
+                            </div>
+
+                            <div class="field">
+                                <div class="control">
+                                    <input class="input is-medium" type="password" placeholder="Password" id="password">
+                                </div>
+                            </div>
+                            <a class="button is-block is-info is-medium" id="submit">Login</a>
+                            <p id="error" style="color:red"></p>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<script>
+
+    $(document).ready(function(){
+        document.cookie = "token=;expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+     });
+
+    $("#submit").click(function(e) {
+       e.preventDefault();
+       $.ajax({
+          url: '/MyAppName/login',
+          type: "POST",
+          data: {
+             username: $("#username").val(),
+             password: $("#password").val()
+          },
+          success: function (data, status, xhr) {
+             if(data == '' || data == null){
+                $("#error").html("Login fallito!");
+                document.cookie = "token=;expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+             } else {
+                document.cookie = "token=" + data;
+                $("#password").val("");
+                $("#error").val("");
+                window.location.href = "/MyAppName/PaginaDiGestione.html";
+             }
+          },
+          error: function(result) {
+             $("#error").html("Errore di connessione al server!");
+             document.cookie = "token=;expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+             console.log(result);
+          }
+       });
+    });
+
+</script>
+</body>
+</html>
+
+
+--------------------------------######################LOGIN FILTER#############################------------------------------------------
+package it.myexample.myappname.login;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.context.support.SpringBeanAutowiringSupport;
+
+import javax.servlet.*;
+import javax.servlet.annotation.WebFilter;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Arrays;
+
+@WebFilter(filterName = "/loginFilter", urlPatterns = "/*")
+public class LoginFilter  implements Filter {
+
+    private static final String[] ALLOWED_URL_PATH = {"/login", "/signin.html"};
+    private static final String LOGIN_ERROR_MESSAGE = "NON AUTORIZZATO. EFFETTUARE IL LOGIN.";
+
+    @Autowired LoginService loginService;
+
+    @Override
+    public void doFilter(ServletRequest req, ServletResponse resp, FilterChain chain) throws IOException, ServletException {
+        HttpServletRequest request = (HttpServletRequest) req;
+        HttpServletResponse response = (HttpServletResponse) resp;
+        if( ! Arrays.asList(ALLOWED_URL_PATH).contains(request.getServletPath())){
+            //controllare il token
+            String token = null;
+            if (request.getCookies() != null) {
+                Cookie[] cookies = request.getCookies();   //token present in cookie
+                for (Cookie cookie : cookies) {
+                    if (cookie.getName().equals("token")) {
+                        token = cookie.getValue();
+                    }
+                }
+            }
+            if(token != null && !"".equals(token) ){
+                if( token.equals(loginService.getToken()) ) {
+                    chain.doFilter(request, response);
+                    response.getOutputStream().flush();
+                    response.getOutputStream().close();
+                    return;
+                }
+            }
+            //blocca la navigazione perchè manca l'autenticazione
+            response.getWriter().write(LOGIN_ERROR_MESSAGE);
+        } else {
+            chain.doFilter(request, response);
+            response.getOutputStream().flush();
+            response.getOutputStream().close();
+            return;
+        }
+    }
+
+    @Override
+    public void init(FilterConfig arg0) throws ServletException {
+        SpringBeanAutowiringSupport.processInjectionBasedOnCurrentContext(this);
+    }
+
+    @Override
+    public void destroy() {
+    }
+
+}
+
+
+--------------------------------########################LOGIN CONTROLLER############################-----------------------------------------
+
+package it.myexample.myappname.login;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class LoginController {
+
+    @Autowired
+    LoginService loginService;
+
+    @RequestMapping(value = "/login", method = RequestMethod.POST)
+    public String login(@RequestParam String username, @RequestParam String password){
+        return loginService.checkCredentials(username, password);
+    }
+}
+
+
+------------------------------#############################LOGIN SERVICE INTERFACE##########################--------------------------------
+
+package it.myexample.myappname.login;
+
+
+/**
+ * Riceve username e password e restituisce una stringa randomica di sessione qualora l'utente sia autenticato.
+ * Restituisce una stringa vuota altrimenti.
+ */
+public interface LoginService {
+    String checkCredentials(String username, String password);
+    String getToken();
+}
+
+
+----------------------------##########################LOGIN SERVICE IMPL#################################----------------------------------
+
+package it.myexample.myappname.login;
+
+import org.springframework.stereotype.Service;
+import java.util.UUID;
+
+
+@Service
+public class LoginServiceImpl implements LoginService{
+
+    private final static String USERNAME = "username";
+    private final static String PASSWORD = "pwd";
+    private String token="";
+
+    @Override
+    public String checkCredentials(String username, String password){
+        if(USERNAME.equals(username) && PASSWORD.equals(password)){
+            token  = UUID.randomUUID().toString();
+            return token;
+        }
+        return "";
+    }
+
+    public String getToken(){
+        return token;
+    }
+
+}
+
+
+--------------------############PORZIONE DI CODICE JAVASCRIPT NELLA PaginaDiGestione.html################------------------
+<script>
+$(document).ready(function(){
+   if(getCookie("token")=="" || getCookie("token") == null){
+      window.location.replace("/MyAppName/signin.html");
+   }
+});
+</script>
